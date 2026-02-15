@@ -1,7 +1,6 @@
-# 
-
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List
 import json
@@ -12,20 +11,18 @@ app = FastAPI()
 # Configure CORS middleware - MUST be added before routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins
-    allow_credentials=False,  # Must be False when using allow_origins=["*"]
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Load telemetry data
 def load_telemetry_data():
-    # Try multiple possible paths for the JSON file
     possible_paths = [
-        "telemetry_data.json",
-        "api/telemetry_data.json",
         os.path.join(os.path.dirname(__file__), "telemetry_data.json"),
-        os.path.join(os.path.dirname(__file__), "..", "telemetry_data.json"),
+        "api/telemetry_data.json",
+        "telemetry_data.json",
     ]
     
     for path in possible_paths:
@@ -34,8 +31,6 @@ def load_telemetry_data():
                 return json.load(f)
         except FileNotFoundError:
             continue
-    
-    # Return empty list if file not found
     return []
 
 # Request model
@@ -55,24 +50,23 @@ def calculate_region_stats(data: List[dict], region: str, threshold_ms: float) -
             "breaches": 0
         }
     
-    # Extract latency and uptime values
     latencies = [d.get("latency_ms", 0) for d in region_data]
     uptimes = [d.get("uptime_pct", 0) for d in region_data]
     
-    # Calculate average latency
+    # Average latency
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
     
-    # Calculate P95 latency
+    # P95 latency (95th percentile)
     sorted_latencies = sorted(latencies)
     p95_index = int(len(sorted_latencies) * 0.95)
     if p95_index >= len(sorted_latencies):
         p95_index = len(sorted_latencies) - 1
     p95_latency = sorted_latencies[p95_index] if sorted_latencies else 0
     
-    # Calculate average uptime
+    # Average uptime
     avg_uptime = sum(uptimes) / len(uptimes) if uptimes else 0
     
-    # Count breaches (latency exceeding threshold)
+    # Breaches (count of records above threshold)
     breaches = sum(1 for lat in latencies if lat > threshold_ms)
     
     return {
@@ -81,6 +75,18 @@ def calculate_region_stats(data: List[dict], region: str, threshold_ms: float) -
         "avg_uptime": round(avg_uptime, 2),
         "breaches": breaches
     }
+
+# Handle OPTIONS preflight request explicitly
+@app.options("/")
+async def options_handler():
+    return JSONResponse(
+        content={},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
 
 @app.get("/")
 async def root():
@@ -95,8 +101,3 @@ async def process_telemetry(request: TelemetryRequest):
         result[region] = calculate_region_stats(data, region, request.threshold_ms)
     
     return result
-
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    return {"status": "ok"}
