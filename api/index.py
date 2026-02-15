@@ -37,6 +37,25 @@ class TelemetryRequest(BaseModel):
     regions: List[str]
     threshold_ms: float
 
+# Calculate P95 using linear interpolation (numpy-style)
+def calculate_p95(values: List[float]) -> float:
+    if not values:
+        return 0
+    
+    sorted_values = sorted(values)
+    n = len(sorted_values)
+    
+    # Use linear interpolation method (same as numpy.percentile default)
+    index = 0.95 * (n - 1)
+    lower = int(index)
+    upper = lower + 1
+    fraction = index - lower
+    
+    if upper >= n:
+        return sorted_values[-1]
+    
+    return sorted_values[lower] + fraction * (sorted_values[upper] - sorted_values[lower])
+
 # Calculate statistics for a region
 def calculate_region_stats(data: List[dict], region: str, threshold_ms: float) -> dict:
     region_data = [d for d in data if d.get("region") == region]
@@ -55,12 +74,8 @@ def calculate_region_stats(data: List[dict], region: str, threshold_ms: float) -
     # Average latency
     avg_latency = sum(latencies) / len(latencies) if latencies else 0
     
-    # P95 latency (95th percentile)
-    sorted_latencies = sorted(latencies)
-    p95_index = int(len(sorted_latencies) * 0.95)
-    if p95_index >= len(sorted_latencies):
-        p95_index = len(sorted_latencies) - 1
-    p95_latency = sorted_latencies[p95_index] if sorted_latencies else 0
+    # P95 latency (95th percentile with interpolation)
+    p95_latency = calculate_p95(latencies)
     
     # Average uptime
     avg_uptime = sum(uptimes) / len(uptimes) if uptimes else 0
@@ -87,5 +102,4 @@ async def process_telemetry(request: TelemetryRequest):
     for region in request.regions:
         regions_result[region] = calculate_region_stats(data, region, request.threshold_ms)
     
-    # Wrap response in "regions" key
     return {"regions": regions_result}
