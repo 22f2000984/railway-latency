@@ -1,84 +1,102 @@
+# 
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import json
-import numpy as np
-from pathlib import Path
 from typing import List
+import json
+import os
 
 app = FastAPI()
 
-# Enable CORS for POST requests from any origin
+# Configure CORS middleware - MUST be added before routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["POST","OPTIONS","GET"],
-    # llow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when using allow_origins=["*"]
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
 )
 
+# Load telemetry data
+def load_telemetry_data():
+    # Try multiple possible paths for the JSON file
+    possible_paths = [
+        "telemetry_data.json",
+        "api/telemetry_data.json",
+        os.path.join(os.path.dirname(__file__), "telemetry_data.json"),
+        os.path.join(os.path.dirname(__file__), "..", "telemetry_data.json"),
+    ]
+    
+    for path in possible_paths:
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except FileNotFoundError:
+            continue
+    
+    # Return empty list if file not found
+    return []
 
+# Request model
 class TelemetryRequest(BaseModel):
     regions: List[str]
     threshold_ms: float
 
-
-class RegionMetrics(BaseModel):
-    avg_latency: float
-    p95_latency: float
-    avg_uptime: float
-    breaches: int
-
-
-def load_telemetry_data():
-    """Load telemetry data from JSON file."""
-    data_path = Path(__file__).parent / "telemetry_data.json"
-    with open(data_path, "r") as f:
-        return json.load(f)
-
-
-def calculate_metrics(records: list, threshold_ms: float) -> RegionMetrics:
-    """Calculate metrics for a list of telemetry records."""
-    if not records:
-        return RegionMetrics(
-            avg_latency=0.0,
-            p95_latency=0.0,
-            avg_uptime=0.0,
-            breaches=0
-        )
+# Calculate statistics for a region
+def calculate_region_stats(data: List[dict], region: str, threshold_ms: float) -> dict:
+    region_data = [d for d in data if d.get("region") == region]
     
-    latencies = [r["latency_ms"] for r in records]
-    uptimes = [r["uptime_pct"] for r in records]
+    if not region_data:
+        return {
+            "avg_latency": 0,
+            "p95_latency": 0,
+            "avg_uptime": 0,
+            "breaches": 0
+        }
     
-    avg_latency = round(np.mean(latencies), 2)
-    p95_latency = round(np.percentile(latencies, 95), 2)
-    avg_uptime = round(np.mean(uptimes), 2)
+    # Extract latency and uptime values
+    latencies = [d.get("latency_ms", 0) for d in region_data]
+    uptimes = [d.get("uptime_pct", 0) for d in region_data]
+    
+    # Calculate average latency
+    avg_latency = sum(latencies) / len(latencies) if latencies else 0
+    
+    # Calculate P95 latency
+    sorted_latencies = sorted(latencies)
+    p95_index = int(len(sorted_latencies) * 0.95)
+    if p95_index >= len(sorted_latencies):
+        p95_index = len(sorted_latencies) - 1
+    p95_latency = sorted_latencies[p95_index] if sorted_latencies else 0
+    
+    # Calculate average uptime
+    avg_uptime = sum(uptimes) / len(uptimes) if uptimes else 0
+    
+    # Count breaches (latency exceeding threshold)
     breaches = sum(1 for lat in latencies if lat > threshold_ms)
     
-    return RegionMetrics(
-        avg_latency=avg_latency,
-        p95_latency=p95_latency,
-        avg_uptime=avg_uptime,
-        breaches=breaches
-    )
+    return {
+        "avg_latency": round(avg_latency, 2),
+        "p95_latency": round(p95_latency, 2),
+        "avg_uptime": round(avg_uptime, 2),
+        "breaches": breaches
+    }
 
+@app.get("/")
+async def root():
+    return {"message": "Railway Latency API", "status": "healthy"}
 
 @app.post("/")
 async def process_telemetry(request: TelemetryRequest):
-    """
-    Process telemetry data and return metrics per region.
-    """
-    telemetry_data = load_telemetry_data()
+    data = load_telemetry_data()
     
-    results = {}
-    
+    result = {}
     for region in request.regions:
-        region_records = [
-            record for record in telemetry_data 
-            if record["region"].lower() == region.lower()
-        ]
-        metrics = calculate_metrics(region_records, request.threshold_ms)
-        results[region] = metrics.model_dump()
+        result[region] = calculate_region_stats(data, region, request.threshold_ms)
     
-    return results
+    return result
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
