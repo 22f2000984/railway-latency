@@ -1,6 +1,5 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List
 import json
@@ -8,7 +7,7 @@ import os
 
 app = FastAPI()
 
-# Configure CORS middleware - MUST be added before routes
+# Configure CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -76,18 +75,6 @@ def calculate_region_stats(data: List[dict], region: str, threshold_ms: float) -
         "breaches": breaches
     }
 
-# Handle OPTIONS preflight request explicitly
-@app.options("/")
-async def options_handler():
-    return JSONResponse(
-        content={},
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "*",
-        }
-    )
-
 @app.get("/")
 async def root():
     return {"message": "Railway Latency API", "status": "healthy"}
@@ -96,8 +83,9 @@ async def root():
 async def process_telemetry(request: TelemetryRequest):
     data = load_telemetry_data()
     
-    result = {}
+    regions_result = {}
     for region in request.regions:
-        result[region] = calculate_region_stats(data, region, request.threshold_ms)
+        regions_result[region] = calculate_region_stats(data, region, request.threshold_ms)
     
-    return result
+    # Wrap response in "regions" key
+    return {"regions": regions_result}
